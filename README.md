@@ -50,7 +50,6 @@ The plugin provides a native Resolve UI accessible from
 - Video-only or Video+Audio aware
 
 ### UI
-- Fixed window height
 - Persistent user settings saved locally
 - Native Resolve Workflow Integration UI
 
@@ -67,15 +66,16 @@ The plugin provides a native Resolve UI accessible from
 ## Installation
 
 Copy the script file into the Workflow Integration Plugins folder and restart DaVinci Resolve.
+Make the folder if not already there.
 
 ### macOS
-/Library/Application Support/Blackmagic Design/DaVinci Resolve/Workflow Integration Plugins/
+`/Library/Application Support/Blackmagic Design/DaVinci Resolve/Workflow Integration Plugins/`
 
 ### Windows
-%PROGRAMDATA%\Blackmagic Design\DaVinci Resolve\Support\Workflow Integration Plugins\
+`%PROGRAMDATA%\Blackmagic Design\DaVinci Resolve\Support\Workflow Integration Plugins\`
 
 After restarting Resolve, the script is available in:
-Workspace → Workflow Integration
+`Workspace → Workflow Integration`
 
 ---
 
