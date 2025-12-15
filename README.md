@@ -115,6 +115,6 @@ Free to use, modify and redistribute.
 ## Credits
 
 Inspired by and structurally based on the Resolve Workflow Integration approach used in  
-**Resolve Stills Markers Exporter**  [oai_citation:0‡README.md](sediment://file_000000003438722f95e1791b6031010a)
+**Resolve Stills Markers Exporter** https://github.com/AssoDIT/DaVinici-Resolve-Stills-Markers
 
 Extended and adapted for editorial ALE and metadata workflows.
