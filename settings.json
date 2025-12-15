@@ -1,0 +1,12 @@
+{
+  "export_to": "/Users/be4post/Desktop/",
+  "create_export_folder_timeline_name": true,
+  "tracks_mode": "video_only",
+  "merge_slate": true,
+  "name_mode": "clipname",
+  "slate_format": "scene_shot_take",
+  "slate_add_selected": true,
+  "slate_add_camera": true,
+  "tape_mode": "as_set_in_project",
+  "export_format": "ale_plus_csv_metadata"
+}
