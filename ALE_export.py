@@ -311,6 +311,11 @@ def apply_postprocess_rows(text, meta_csv_path=None):
                     col_names.append("Slate")
                     idx["Slate"] = len(col_names) - 1
 
+            # Ensure Comments DIT column exists (always at the end)
+            if "Comments DIT" not in idx:
+                col_names.append("Comments DIT")
+                idx["Comments DIT"] = len(col_names) - 1
+
             out.append("\t".join(col_names) + "\n")
             continue
 
