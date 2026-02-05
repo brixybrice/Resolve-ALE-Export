@@ -1,15 +1,24 @@
 #! /usr/bin/env python
 # -*- coding: utf-8 -*-
+#
+# Brice BARBIER, BE4POST x ADIT
 
 import os
 import sys
 import json
 import shutil
+import csv
 
 resolve = bmd.scriptapp("Resolve")
 fusion = resolve.Fusion()
 ui = fusion.UIManager
 dispatcher = bmd.UIDispatcher(ui)
+
+# Supprimer ces colonnes si Resolve les sort
+TRACK_COLUMNS_TO_REMOVE = {
+    "TRK1", "TRK2", "TRK3", "TRK4",
+    "Track 1", "Track 2", "Track 3", "Track 4",
+}
 
 DEFAULT_SETTINGS = {
     "export_to": "",
@@ -27,6 +36,9 @@ DEFAULT_SETTINGS = {
     "slate_add_camera": True,
 
     "tape_mode": "as_set_in_project",  # as_set_in_project | reel | unc_clipname_no_ext | empty
+
+    # NEW
+    "import_reviewers_notes": False,  # prend "Reviewed By - Reviewers Notes" du CSV metadata et le met dans "Comments DIT"
 }
 
 def _settings_path():
@@ -71,11 +83,6 @@ def _bash_like_replacements(text):
     text = text.replace("VA1A2", "V")
     text = text.replace("VA1", "V")
     return text
-
-def _strip_trailing_empty_columns(cols):
-    while cols and cols[-1] == "":
-        cols.pop()
-    return cols
 
 def _normalize_row_to_len(row, target_len):
     if len(row) > target_len:
@@ -133,6 +140,7 @@ def build_slate_base(scene, shot, take, fmt):
 def build_slate(scene, shot, take, selected, cam, fmt, add_selected, add_camera):
     base = build_slate_base(scene, shot, take, fmt)
     cam = _safe_strip(cam)
+
     star = "*" if (add_selected and is_selected(selected)) else ""
 
     if add_camera and cam:
@@ -145,13 +153,55 @@ def build_slate(scene, shot, take, selected, cam, fmt, add_selected, add_camera)
 
     return base.strip()
 
-def force_tracks_column_to_v(text):
+def _basename_from_unc(unc_path):
+    p = (unc_path or "").strip()
+    if not p:
+        return ""
+    p = p.replace("\\", "/")
+    return os.path.basename(p)
+
+def _read_utf16_csv_dict(meta_csv_path):
+    """
+    Retourne:
+      notes_by_file: dict[file_basename] = reviewers_notes
+    """
+    notes_by_file = {}
+
+    if not meta_csv_path or not os.path.exists(meta_csv_path):
+        return notes_by_file
+
+    try:
+        with open(meta_csv_path, "r", encoding="utf-16", newline="") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                fn = (row.get("File Name") or "").strip()
+                notes = (row.get("Reviewed By - Reviewers Notes") or "").strip()
+                if fn:
+                    notes_by_file[fn] = notes
+    except Exception:
+        return notes_by_file
+
+    return notes_by_file
+
+def _split_tsv_keep_trailing(line):
+    # conserve les champs vides en fin de ligne
+    # (split("\t") les conserve déjà), on ne strip rien ici
+    return line.split("\t")
+
+def force_tracks_column_to_v_and_remove_trk(text):
+    """
+    - Supprime TRK1..4 (et Track 1..4) des colonnes + des lignes data
+    - Force "Tracks" à "V" si présent
+    """
     lines = text.splitlines(True)
     out = []
+
     in_column = False
     in_data = False
+
     col_names = None
     idx = {}
+    remove_idx = []
 
     for line in lines:
         raw = line.rstrip("\n").rstrip("\r")
@@ -162,6 +212,7 @@ def force_tracks_column_to_v(text):
             in_data = False
             col_names = None
             idx = {}
+            remove_idx = []
             out.append(line)
             continue
 
@@ -172,15 +223,26 @@ def force_tracks_column_to_v(text):
             continue
 
         if in_column and col_names is None and st:
-            col_names = _strip_trailing_empty_columns(raw.split("\t"))
+            original_cols = _split_tsv_keep_trailing(raw)
+            # calc indices à supprimer
+            remove_idx = [i for i, c in enumerate(original_cols) if c in TRACK_COLUMNS_TO_REMOVE]
+            col_names = [c for i, c in enumerate(original_cols) if i not in remove_idx and c != ""]
+            # IMPORTANT: garder exactement les colonnes visibles, pas d'ajout de tab vide
             idx = {name: i for i, name in enumerate(col_names)}
+
             out.append("\t".join(col_names) + "\n")
             continue
 
-        if in_data and st and col_names and "Tracks" in idx:
-            row = _strip_trailing_empty_columns(raw.split("\t"))
+        if in_data and st and col_names:
+            original_row = _split_tsv_keep_trailing(raw)
+            # filtre les TRK*
+            row = [v for i, v in enumerate(original_row) if i not in remove_idx]
+            # coupe/complète à la bonne longueur
             row = _normalize_row_to_len(row, len(col_names))
-            row[idx["Tracks"]] = "V"
+
+            if "Tracks" in idx:
+                row[idx["Tracks"]] = "V"
+
             out.append("\t".join(row) + "\n")
             continue
 
@@ -196,14 +258,25 @@ def unc_clipname_no_ext(source_path):
     base = os.path.basename(p)
     return os.path.splitext(base)[0]
 
-def apply_postprocess_rows(text):
+def apply_postprocess_rows(text, meta_csv_path=None):
+    """
+    - Supprime TRK* (si présents)
+    - Tape column selon option
+    - Merge Slate + Name option
+    - (NEW) Import reviewers notes du CSV metadata vers Comments DIT
+    """
+    notes_by_file = _read_utf16_csv_dict(meta_csv_path) if settings.get("import_reviewers_notes") else {}
+
     lines = text.splitlines(True)
     out = []
 
     in_column = False
     in_data = False
+
     col_names = None
     idx = {}
+    remove_idx = []
+    original_idx = {}
 
     for line in lines:
         raw = line.rstrip("\n").rstrip("\r")
@@ -214,6 +287,8 @@ def apply_postprocess_rows(text):
             in_data = False
             col_names = None
             idx = {}
+            remove_idx = []
+            original_idx = {}
             out.append(line)
             continue
 
@@ -224,7 +299,11 @@ def apply_postprocess_rows(text):
             continue
 
         if in_column and col_names is None and st:
-            col_names = _strip_trailing_empty_columns(raw.split("\t"))
+            original_cols = _split_tsv_keep_trailing(raw)
+            original_idx = {name: i for i, name in enumerate(original_cols)}
+
+            remove_idx = [i for i, c in enumerate(original_cols) if c in TRACK_COLUMNS_TO_REMOVE]
+            col_names = [c for i, c in enumerate(original_cols) if i not in remove_idx and c != ""]
             idx = {name: i for i, name in enumerate(col_names)}
 
             if settings.get("merge_slate"):
@@ -236,9 +315,13 @@ def apply_postprocess_rows(text):
             continue
 
         if in_data and st and col_names:
-            row = _strip_trailing_empty_columns(raw.split("\t"))
+            original_row = _split_tsv_keep_trailing(raw)
+
+            # filtre TRK*
+            row = [v for i, v in enumerate(original_row) if i not in remove_idx]
             row = _normalize_row_to_len(row, len(col_names))
 
+            # Tape
             if "Tape" in idx:
                 tape_mode = settings.get("tape_mode", "as_set_in_project")
 
@@ -256,15 +339,15 @@ def apply_postprocess_rows(text):
                     )
                     row[idx["Tape"]] = unc_clipname_no_ext(source_path)
 
-                else:
-                    pass
+                # as_set_in_project: ne pas toucher
 
+            # Merge Slate + Name
             if settings.get("merge_slate"):
-                scene = get_first_existing(row, idx, ["Scene"])
-                shot = get_first_existing(row, idx, ["Shot"])
-                take = get_first_existing(row, idx, ["Take"])
-                selected = get_first_existing(row, idx, ["Selected", "Good Take"])
-                cam = get_first_existing(row, idx, ["Cam #", "Cam", "Camera", "Camera #", "Cam#", "Camera#"])
+                scene = get_first_existing(original_row, original_idx, ["Scene"])
+                shot = get_first_existing(original_row, original_idx, ["Shot"])
+                take = get_first_existing(original_row, original_idx, ["Take"])
+                selected = get_first_existing(original_row, original_idx, ["Selected", "Good Take"])
+                cam = get_first_existing(original_row, original_idx, ["Camera #", "Cam #", "Cam", "Camera", "Camera#", "Cam#"])
 
                 slate_value = build_slate(
                     scene=scene,
@@ -283,6 +366,15 @@ def apply_postprocess_rows(text):
                 if settings.get("name_mode") == "slate" and "Name" in idx:
                     row[idx["Name"]] = slate_value
 
+            # NEW: importer reviewers notes du CSV metadata -> Comments DIT
+            if notes_by_file and "Comments DIT" in idx:
+                unc_val = get_first_existing(row, idx, ["UNC"])
+                file_basename = _basename_from_unc(unc_val)
+                if file_basename:
+                    note = notes_by_file.get(file_basename, "")
+                    if note:
+                        row[idx["Comments DIT"]] = note
+
             out.append("\t".join(row) + "\n")
             continue
 
@@ -290,16 +382,24 @@ def apply_postprocess_rows(text):
 
     return "".join(out)
 
-def format_ale_file(ale_path):
+def format_ale_file(ale_path, meta_csv_path=None):
     with open(ale_path, "r", encoding="utf-8", errors="ignore") as f:
         text = f.read()
 
     text = _bash_like_replacements(text)
 
+    # Video only: force V + supprime TRK*
     if settings.get("tracks_mode") == "video_only":
-        text = force_tracks_column_to_v(text)
+        text = force_tracks_column_to_v_and_remove_trk(text)
+    else:
+        # même si video+audio, on veut quand même enlever TRK1..4 si présents
+        text = apply_postprocess_rows(text, meta_csv_path=meta_csv_path)
+        with open(ale_path, "w", encoding="utf-8") as f:
+            f.write(text)
+        return
 
-    text = apply_postprocess_rows(text)
+    # autres post-process + (NEW) notes
+    text = apply_postprocess_rows(text, meta_csv_path=meta_csv_path)
 
     with open(ale_path, "w", encoding="utf-8") as f:
         f.write(text)
@@ -335,7 +435,6 @@ def collect_used_mediapool_items(timeline, include_audio):
                     mp = titem.GetMediaPoolItem()
                 except Exception:
                     mp = None
-
                 if not mp:
                     continue
 
@@ -365,7 +464,7 @@ def create_window():
         return existing
 
     width = 640
-    height = 430
+    height = 470  # un peu plus haut pour la nouvelle option
 
     window = dispatcher.AddWindow(
         {
@@ -448,6 +547,12 @@ def create_window():
                         ui.ComboBox({"ID": "TapeModeCombo"})
                     ]
                 ),
+                # NEW
+                ui.CheckBox({
+                    "ID": "ImportReviewersNotes",
+                    "Text": "Import \"Reviewed By - Reviewers Notes\" into \"Comments DIT\"",
+                    "Checked": bool(settings.get("import_reviewers_notes", False))
+                }),
                 ui.HGroup(
                     {"Spacing": 10},
                     [
@@ -532,7 +637,6 @@ def create_window():
             settings["export_format"] = "ale_plus_csv_metadata"
 
         settings["tracks_mode"] = "video_only" if items["TracksCombo"].CurrentIndex == 0 else "video_audio"
-
         settings["merge_slate"] = bool(items["MergeSlate"].Checked)
 
         sf = items["SlateFormatCombo"].CurrentIndex
@@ -545,7 +649,6 @@ def create_window():
 
         settings["slate_add_selected"] = bool(items["SlateAddSelected"].Checked)
         settings["slate_add_camera"] = bool(items["SlateAddCamera"].Checked)
-
         settings["name_mode"] = "clipname" if items["NameModeCombo"].CurrentIndex == 0 else "slate"
 
         tm = items["TapeModeCombo"].CurrentIndex
@@ -557,6 +660,8 @@ def create_window():
             settings["tape_mode"] = "unc_clipname_no_ext"
         else:
             settings["tape_mode"] = "empty"
+
+        settings["import_reviewers_notes"] = bool(items["ImportReviewersNotes"].Checked)
 
         save_settings(settings)
         dispatcher.ExitLoop(True)
@@ -598,6 +703,10 @@ csv_meta_path = os.path.join(export_dir, base_name + "_metadata.csv")
 include_audio = (settings.get("tracks_mode") != "video_only")
 export_format = settings.get("export_format", "ale")
 
+# Si on veut importer reviewers notes, il faut le CSV metadata (au moins temporairement)
+need_meta_for_notes = bool(settings.get("import_reviewers_notes"))
+
+# ALE
 if export_format in ("ale", "ale_plus_csv_metadata"):
     if not hasattr(resolve, "EXPORT_ALE"):
         raise RuntimeError("EXPORT_ALE not available")
@@ -605,8 +714,8 @@ if export_format in ("ale", "ale_plus_csv_metadata"):
     if not ok:
         raise RuntimeError("ALE export failed")
     archive_file(ale_path)
-    format_ale_file(ale_path)
 
+# CSV Edit Index
 if export_format == "csv_edit_index":
     if not hasattr(resolve, "EXPORT_TEXT_CSV"):
         raise RuntimeError("EXPORT_TEXT_CSV not available")
@@ -615,11 +724,18 @@ if export_format == "csv_edit_index":
         raise RuntimeError("CSV Edit Index export failed")
     archive_file(csv_path)
 
-if export_format in ("csv_metadata", "ale_plus_csv_metadata"):
+# CSV Metadata
+did_export_meta = False
+if export_format in ("csv_metadata", "ale_plus_csv_metadata") or need_meta_for_notes:
     ok, n = export_timeline_metadata_csv(project, timeline, csv_meta_path, include_audio=include_audio)
     if not ok:
         raise RuntimeError("CSV Metadata export failed")
+    did_export_meta = True
     archive_file(csv_meta_path)
     print("CSV Metadata clips exported:", n)
+
+# Postprocess ALE à la fin (pour avoir le meta_csv_path disponible)
+if export_format in ("ale", "ale_plus_csv_metadata"):
+    format_ale_file(ale_path, meta_csv_path=csv_meta_path if did_export_meta else None)
 
 print("Export done")
