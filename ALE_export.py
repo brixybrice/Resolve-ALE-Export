@@ -4,6 +4,7 @@
 # Brice BARBIER, BE4POST x ADIT
 
 import os
+import re
 import sys
 import json
 import shutil
@@ -34,11 +35,17 @@ DEFAULT_SETTINGS = {
     "slate_format": "scene_shot_take",  # scene_shot_take | scene_take_slash | scene_take_dash
     "slate_add_selected": True,
     "slate_add_camera": True,
+    "slate_camera_lowercase": False,
 
     "tape_mode": "as_set_in_project",  # as_set_in_project | reel | unc_clipname_no_ext | empty
 
     # NEW
     "import_reviewers_notes": False,  # prend "Reviewed By - Reviewers Notes" du CSV metadata et le met dans "Comments DIT"
+
+    "audio_tracks": ["A1","A2","A3","A4","A5","A6","A7","A8",
+                     "A9","A10","A11","A12","A13","A14","A15","A16"],
+
+    "open_folder_after_export": False,
 }
 
 def _settings_path():
@@ -78,10 +85,11 @@ def archive_file(path):
 def _bash_like_replacements(text):
     text = text.replace("Good Take", "Selected")
     text = text.replace("Reviewers Notes", "Comments DIT")
-    text = text.replace("VA1A2A3A4", "V")
-    text = text.replace("VA1A2A3", "V")
-    text = text.replace("VA1A2", "V")
-    text = text.replace("VA1", "V")
+    selected_audio = set(settings.get("audio_tracks", [f"A{i}" for i in range(1, 17)]))
+    def _filter_audio(m):
+        kept = [t for t in re.findall(r'A\d+', m.group(0)) if t in selected_audio]
+        return 'V' + ''.join(kept)
+    text = re.sub(r'V(A\d+)+', _filter_audio, text)
     return text
 
 def _normalize_row_to_len(row, target_len):
@@ -137,9 +145,11 @@ def build_slate_base(scene, shot, take, fmt):
         base = (base + "-" + take) if base else take
     return base.strip()
 
-def build_slate(scene, shot, take, selected, cam, fmt, add_selected, add_camera):
+def build_slate(scene, shot, take, selected, cam, fmt, add_selected, add_camera, lowercase_camera=False):
     base = build_slate_base(scene, shot, take, fmt)
     cam = _safe_strip(cam)
+    if lowercase_camera:
+        cam = cam.lower()
 
     star = "*" if (add_selected and is_selected(selected)) else ""
 
@@ -363,6 +373,7 @@ def apply_postprocess_rows(text, meta_csv_path=None):
                     fmt=settings.get("slate_format", "scene_shot_take"),
                     add_selected=bool(settings.get("slate_add_selected", True)),
                     add_camera=bool(settings.get("slate_add_camera", True)),
+                    lowercase_camera=bool(settings.get("slate_camera_lowercase", False)),
                 )
 
                 if "Slate" in idx:
@@ -469,7 +480,7 @@ def create_window():
         return existing
 
     width = 640
-    height = 470  # un peu plus haut pour la nouvelle option
+    height = 560
 
     window = dispatcher.AddWindow(
         {
@@ -512,6 +523,29 @@ def create_window():
                         ui.ComboBox({"ID": "TracksCombo"})
                     ]
                 ),
+                ui.HGroup(
+                    {"Spacing": 10},
+                    [
+                        ui.Label({"Text": "Audio tracks", "MinimumSize": [200, 0]}),
+                        ui.VGroup(
+                            {"Spacing": 2},
+                            [
+                                ui.HGroup(
+                                    {"Spacing": 4},
+                                    [ui.CheckBox({"ID": "AudioSelectAll", "Text": "All"})] +
+                                    [ui.CheckBox({"ID": f"Audio{t}", "Text": t}) for t in
+                                     ["A1","A2","A3","A4","A5","A6","A7","A8"]]
+                                ),
+                                ui.HGroup(
+                                    {"Spacing": 4},
+                                    [ui.HGap(0)] +
+                                    [ui.CheckBox({"ID": f"Audio{t}", "Text": t}) for t in
+                                     ["A9","A10","A11","A12","A13","A14","A15","A16"]]
+                                ),
+                            ]
+                        )
+                    ]
+                ),
                 ui.CheckBox({
                     "ID": "MergeSlate",
                     "Text": "Merge slating info into Slate",
@@ -535,7 +569,8 @@ def create_window():
                     {"Spacing": 10},
                     [
                         ui.Label({"Text": "Slate camera", "MinimumSize": [200, 0]}),
-                        ui.CheckBox({"ID": "SlateAddCamera", "Text": "Add camera", "Checked": bool(settings.get("slate_add_camera", True))})
+                        ui.CheckBox({"ID": "SlateAddCamera", "Text": "Add camera", "Checked": bool(settings.get("slate_add_camera", True))}),
+                        ui.CheckBox({"ID": "SlateCameraLowercase", "Text": "Lowercase", "Checked": bool(settings.get("slate_camera_lowercase", False))})
                     ]
                 ),
                 ui.HGroup(
@@ -552,11 +587,15 @@ def create_window():
                         ui.ComboBox({"ID": "TapeModeCombo"})
                     ]
                 ),
-                # NEW
                 ui.CheckBox({
                     "ID": "ImportReviewersNotes",
                     "Text": "Import \"Reviewed By - Reviewers Notes\" into \"Comments DIT\"",
                     "Checked": bool(settings.get("import_reviewers_notes", False))
+                }),
+                ui.CheckBox({
+                    "ID": "OpenFolderAfterExport",
+                    "Text": "Open export folder when done",
+                    "Checked": bool(settings.get("open_folder_after_export", False))
                 }),
                 ui.HGroup(
                     {"Spacing": 10},
@@ -589,6 +628,34 @@ def create_window():
     items["TracksCombo"].AddItem("Video only")
     items["TracksCombo"].AddItem("Video + audio")
     items["TracksCombo"].CurrentIndex = 0 if settings.get("tracks_mode") == "video_only" else 1
+
+    ALL_AUDIO_TRACKS = [f"A{i}" for i in range(1, 17)]
+    saved_audio = set(settings.get("audio_tracks", ALL_AUDIO_TRACKS))
+    audio_enabled = (items["TracksCombo"].CurrentIndex == 1)
+    for t in ALL_AUDIO_TRACKS:
+        cb = items[f"Audio{t}"]
+        cb.Checked = (t in saved_audio)
+        cb.Enabled = audio_enabled
+
+    all_checked = all(t in saved_audio for t in ALL_AUDIO_TRACKS)
+    items["AudioSelectAll"].Checked = all_checked
+    items["AudioSelectAll"].Enabled = audio_enabled
+
+    def _set_audio_checkboxes_enabled(enabled):
+        for t in ALL_AUDIO_TRACKS:
+            items[f"Audio{t}"].Enabled = enabled
+        items["AudioSelectAll"].Enabled = enabled
+
+    def OnTracksComboChanged(ev):
+        _set_audio_checkboxes_enabled(items["TracksCombo"].CurrentIndex == 1)
+
+    def OnAudioSelectAll(ev):
+        state = items["AudioSelectAll"].Checked
+        for t in ALL_AUDIO_TRACKS:
+            items[f"Audio{t}"].Checked = state
+
+    window.On["TracksCombo"].CurrentIndexChanged = OnTracksComboChanged
+    window.On["AudioSelectAll"].Clicked = OnAudioSelectAll
 
     items["SlateFormatCombo"].AddItem("Scene/Shot-Take")
     items["SlateFormatCombo"].AddItem("Scene/Take")
@@ -654,6 +721,7 @@ def create_window():
 
         settings["slate_add_selected"] = bool(items["SlateAddSelected"].Checked)
         settings["slate_add_camera"] = bool(items["SlateAddCamera"].Checked)
+        settings["slate_camera_lowercase"] = bool(items["SlateCameraLowercase"].Checked)
         settings["name_mode"] = "clipname" if items["NameModeCombo"].CurrentIndex == 0 else "slate"
 
         tm = items["TapeModeCombo"].CurrentIndex
@@ -667,6 +735,9 @@ def create_window():
             settings["tape_mode"] = "empty"
 
         settings["import_reviewers_notes"] = bool(items["ImportReviewersNotes"].Checked)
+        settings["open_folder_after_export"] = bool(items["OpenFolderAfterExport"].Checked)
+
+        settings["audio_tracks"] = [t for t in ALL_AUDIO_TRACKS if items[f"Audio{t}"].Checked]
 
         save_settings(settings)
         dispatcher.ExitLoop(True)
@@ -744,3 +815,7 @@ if export_format in ("ale", "ale_plus_csv_metadata"):
     format_ale_file(ale_path, meta_csv_path=csv_meta_path if did_export_meta else None)
 
 print("Export done")
+
+if settings.get("open_folder_after_export"):
+    import subprocess
+    subprocess.Popen(["open", export_dir])
