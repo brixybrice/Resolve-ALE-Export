@@ -480,7 +480,7 @@ def create_window():
         return existing
 
     width = 640
-    height = 560
+    height = 500
 
     window = dispatcher.AddWindow(
         {
@@ -491,13 +491,14 @@ def create_window():
             "FixedSize": [width, height],
             "MinimumSize": [width, height],
             "MaximumSize": [width, height],
-            "Events": {"Close": True}
+            "Events": {"Close": True, "KeyPress": True}
         },
         ui.VGroup(
-            {"Spacing": 10},
+            {"Spacing": 6, "MarginLeft": 12, "MarginTop": 12, "MarginRight": 6, "MarginBottom": 20},
             [
+                # ── Export ──────────────────────────────────────────
                 ui.HGroup(
-                    {"Spacing": 10},
+                    {"Spacing": 4},
                     [
                         ui.Label({"Text": "Export to", "MinimumSize": [200, 0]}),
                         ui.LineEdit({"ID": "ExportPath", "Text": settings.get("export_to", "")}),
@@ -510,34 +511,36 @@ def create_window():
                     "Checked": bool(settings.get("create_export_folder_timeline_name", True))
                 }),
                 ui.HGroup(
-                    {"Spacing": 10},
+                    {"Spacing": 4},
                     [
                         ui.Label({"Text": "Export format", "MinimumSize": [200, 0]}),
                         ui.ComboBox({"ID": "ExportFormatCombo"})
                     ]
                 ),
+                ui.VGap(2),
+                # ── Tracks ──────────────────────────────────────────
                 ui.HGroup(
-                    {"Spacing": 10},
+                    {"Spacing": 4},
                     [
                         ui.Label({"Text": "Tracks", "MinimumSize": [200, 0]}),
                         ui.ComboBox({"ID": "TracksCombo"})
                     ]
                 ),
                 ui.HGroup(
-                    {"Spacing": 10},
+                    {"Spacing": 4},
                     [
                         ui.Label({"Text": "Audio tracks", "MinimumSize": [200, 0]}),
                         ui.VGroup(
-                            {"Spacing": 2},
+                            {"Spacing": 4},
                             [
                                 ui.HGroup(
-                                    {"Spacing": 4},
+                                    {"Spacing": 6},
                                     [ui.CheckBox({"ID": "AudioSelectAll", "Text": "All"})] +
                                     [ui.CheckBox({"ID": f"Audio{t}", "Text": t}) for t in
                                      ["A1","A2","A3","A4","A5","A6","A7","A8"]]
                                 ),
                                 ui.HGroup(
-                                    {"Spacing": 4},
+                                    {"Spacing": 6},
                                     [ui.HGap(0)] +
                                     [ui.CheckBox({"ID": f"Audio{t}", "Text": t}) for t in
                                      ["A9","A10","A11","A12","A13","A14","A15","A16"]]
@@ -546,27 +549,29 @@ def create_window():
                         )
                     ]
                 ),
+                ui.VGap(2),
+                # ── Slate ───────────────────────────────────────────
                 ui.CheckBox({
                     "ID": "MergeSlate",
                     "Text": "Merge slating info into Slate",
                     "Checked": bool(settings.get("merge_slate", False))
                 }),
                 ui.HGroup(
-                    {"Spacing": 10},
+                    {"Spacing": 4},
                     [
                         ui.Label({"Text": "Slate format", "MinimumSize": [200, 0]}),
                         ui.ComboBox({"ID": "SlateFormatCombo"})
                     ]
                 ),
                 ui.HGroup(
-                    {"Spacing": 10},
+                    {"Spacing": 4},
                     [
                         ui.Label({"Text": "Slate selected", "MinimumSize": [200, 0]}),
                         ui.CheckBox({"ID": "SlateAddSelected", "Text": "Add star if selected", "Checked": bool(settings.get("slate_add_selected", True))})
                     ]
                 ),
                 ui.HGroup(
-                    {"Spacing": 10},
+                    {"Spacing": 4},
                     [
                         ui.Label({"Text": "Slate camera", "MinimumSize": [200, 0]}),
                         ui.CheckBox({"ID": "SlateAddCamera", "Text": "Add camera", "Checked": bool(settings.get("slate_add_camera", True))}),
@@ -574,19 +579,21 @@ def create_window():
                     ]
                 ),
                 ui.HGroup(
-                    {"Spacing": 10},
+                    {"Spacing": 4},
                     [
                         ui.Label({"Text": "Name column", "MinimumSize": [200, 0]}),
                         ui.ComboBox({"ID": "NameModeCombo"})
                     ]
                 ),
                 ui.HGroup(
-                    {"Spacing": 10},
+                    {"Spacing": 4},
                     [
                         ui.Label({"Text": "Tape column", "MinimumSize": [200, 0]}),
                         ui.ComboBox({"ID": "TapeModeCombo"})
                     ]
                 ),
+                ui.VGap(2),
+                # ── Misc ────────────────────────────────────────────
                 ui.CheckBox({
                     "ID": "ImportReviewersNotes",
                     "Text": "Import \"Reviewed By - Reviewers Notes\" into \"Comments DIT\"",
@@ -597,8 +604,10 @@ def create_window():
                     "Text": "Open export folder when done",
                     "Checked": bool(settings.get("open_folder_after_export", False))
                 }),
+                ui.VGap(2),
+                # ── Buttons ─────────────────────────────────────────
                 ui.HGroup(
-                    {"Spacing": 10},
+                    {"Spacing": 4},
                     [
                         ui.HGap(1),
                         ui.Button({"ID": "Cancel", "Text": "Cancel"}),
@@ -686,6 +695,17 @@ def create_window():
     else:
         items["TapeModeCombo"].CurrentIndex = 3
 
+    SLATE_ITEMS = ["SlateFormatCombo", "SlateAddSelected", "SlateAddCamera", "SlateCameraLowercase"]
+
+    def _set_slate_enabled(enabled):
+        for item_id in SLATE_ITEMS:
+            items[item_id].Enabled = enabled
+
+    _set_slate_enabled(bool(settings.get("merge_slate", False)))
+
+    def OnMergeSlate(ev):
+        _set_slate_enabled(items["MergeSlate"].Checked)
+
     def OnBrowse(ev):
         d = fusion.RequestDir(items["ExportPath"].Text)
         if d:
@@ -693,6 +713,12 @@ def create_window():
 
     def OnCancel(ev):
         dispatcher.ExitLoop(False)
+
+    def OnKeyPress(ev):
+        if ev["Key"] == 16777216:   # Escape
+            dispatcher.ExitLoop(False)
+        elif ev["Key"] in (16777220, 16777221):  # Return / Enter
+            OnStart(ev)
 
     def OnStart(ev):
         settings["export_to"] = items["ExportPath"].Text
@@ -743,9 +769,11 @@ def create_window():
         dispatcher.ExitLoop(True)
 
     window.On["Browse"].Clicked = OnBrowse
+    window.On["MergeSlate"].Clicked = OnMergeSlate
     window.On["Cancel"].Clicked = OnCancel
     window.On["Start"].Clicked = OnStart
     window.On[winID].Close = OnCancel
+    window.On[winID].KeyPress = OnKeyPress
 
     return window
 
